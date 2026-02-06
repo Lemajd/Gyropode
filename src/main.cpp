@@ -38,10 +38,10 @@ volatile float Vs = 0; // sortie filtre
 volatile bool FlagCalcul = false;
 
 float Te = 10;    // ms
-float Tau = 1000; // ms
+float Tau = 200; // ms
 float A, B;
 
-int16_t ax, ay, gz;
+int16_t ax, ay, az, gz;
 float vBAT;
 float angleA;
 float angleG;
@@ -69,10 +69,11 @@ void taskControle(void *parameters)
   {
     ax = mpu.getAccelerationX();
     ay = mpu.getAccelerationY();
+    az = mpu.getAccelerationZ();
     gz = mpu.getRotationZ();
 
-    angleA = atan2(float(ay), float(ax));
-    angleG = gz * Tau;
+    angleA = atan2(float(az), float(ax))*100;
+    angleG = gz * Tau/1000;
 
     Ve = angleG + angleA;
     Vs = A * Ve + B * Vs;
@@ -98,7 +99,6 @@ void taskSerial(void *parameters)
         ax, ay, angleA, angleG, pos1, pos2, vBAT
       );
       */
-      Serial.print(Vs);
 
       FlagCalcul = false;
     }
@@ -164,7 +164,6 @@ void setup()
 
 void reception(char ch)
 {
-
   static int i = 0;
   static String chaine = "";
   String commande;
@@ -200,6 +199,7 @@ void reception(char ch)
       B = Tau / Te * A;
     }
 
+
     chaine = "";
   }
   else
@@ -211,7 +211,12 @@ void reception(char ch)
 /* ===================== LOOP ===================== */
 void loop()
 {
-  // vide, FreeRTOS travaille
+  if (FlagCalcul == 1)
+  {
+    Serial.printf("%lf %lf %lf %lf\n", Vs, Ve, angleA, angleG);
+
+    FlagCalcul = 0;
+  }
 }
 
 void serialEvent()
