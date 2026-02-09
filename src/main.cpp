@@ -1,7 +1,9 @@
 #include <Arduino.h>
 #include <String.h>
-#include "I2Cdev.h"
-#include "MPU6050.h"
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <math.h>
 #include <ESP32Encoder.h>
 
 /* ===================== PINOUT ===================== */
@@ -20,31 +22,41 @@ int enableBPin = 0;
 
 int ADCpin = 25;
 
-/* ===================== PWM ===================== */
+/* ===================== cmd_P ===================== */
 const int freq = 30000;
 const int pwmChannel_1 = 0;
 const int pwmChannel_2 = 1;
 const int resolution = 8;
 int dutyCycle = 150;
+int maxOutput = 360;
 
 /* ===================== OBJETS ===================== */
 ESP32Encoder encoder_1;
 ESP32Encoder encoder_2;
-MPU6050 mpu;
+Adafruit_MPU6050 mpu;
 
 /* ===================== VARIABLES PARTAGÉES ===================== */
 volatile float Ve = 0; // entrée filtre
 volatile float Vs = 0; // sortie filtre
+volatile float erreur = 0; // sortie filtre
+int cmd_P = 0;
+int cmd_D = 0;
 volatile bool FlagCalcul = false;
 
 float Te = 10;    // ms
-float Tau = 200; // ms
+float Tau = 100; // ms
 float A, B;
+int k = 1; // gain de contrôle (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
 
-int16_t ax, ay, az, gz;
+float ax, ay, az, gz;
 float vBAT;
 float angleA;
 float angleG;
+
+float Kp = 2.94; // gain proportionnel (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
+float Kd = 2.92; // gain dérivé (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
+int cons = 0; // constante de contrôle (ajustée empiriquement pour que le pwm atteigne 255 à l'équilibre)
+int offset = 135; // offset pour compenser les imperfections mécaniques (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
 
 /* ===================== TACHE Batterie ===================== */
 void taskBatterie(void *parameters)
@@ -60,26 +72,72 @@ void taskBatterie(void *parameters)
   }
 }
 
-/* ===================== TACHE CONTROLE (FILTRE) ===================== */
-void taskControle(void *parameters)
+/* ===================== TACHE erreurE (FILTRE) ===================== */
+void taskerreure(void *parameters)
 {
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
   while (1)
   {
-    ax = mpu.getAccelerationX();
-    ay = mpu.getAccelerationY();
-    az = mpu.getAccelerationZ();
-    gz = mpu.getRotationZ();
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
 
-    angleA = atan2(float(az), float(ax))*100;
-    angleG = gz * Tau/1000;
+    ax = a.acceleration.x; // m/s^2
+    ay = a.acceleration.y;
+    az = a.acceleration.z;
+    gz = g.gyro.z; // rad/s
+
+    // angle from accelerometer: convert radians -> degrees
+    float angleA_rad = atan2(az, ax);
+    angleA = angleA_rad * 180.0 / M_PI; // degrees
+
+    // gyro: g.gyro.z is in rad/s -> convert to deg/s and integrate over Tau (ms -> s)
+    angleG = (gz * 180.0 / M_PI) * (Tau / 1000.0); // degrees
 
     Ve = angleG + angleA;
     Vs = A * Ve + B * Vs;
+    
+    erreur = cons - Vs;
+
+    cmd_P = Kp*erreur;
+    cmd_D = cmd_P - (Kd * gz * (180/M_PI));
+
+    if (cmd_D > 0)
+    {
+      cmd_D += offset;
+      // clamp 
+      if (cmd_D > maxOutput) cmd_D = maxOutput;
+
+      // drive motors to correct positive error
+      digitalWrite(motor1Pin1, LOW);
+      digitalWrite(motor1Pin2, HIGH);
+      digitalWrite(motor2Pin1, HIGH);
+      digitalWrite(motor2Pin2, LOW);
+      ledcWrite(pwmChannel_1, cmd_D);
+      ledcWrite(pwmChannel_2, 0.95 * (cmd_D));
+    }
+    else if (cmd_D < 0)
+    {
+      cmd_D = offset - cmd_D; // make cmd_D positive and add offset
+      // clamp 
+      if (cmd_D > maxOutput) cmd_D = maxOutput;
+
+      // reverse direction
+      digitalWrite(motor1Pin1, HIGH);
+      digitalWrite(motor1Pin2, LOW);
+      digitalWrite(motor2Pin1, LOW);
+      digitalWrite(motor2Pin2, HIGH);
+      ledcWrite(pwmChannel_1, cmd_D);
+      ledcWrite(pwmChannel_2, 0.95 * (cmd_D));
+    }
+    else
+    {
+      // stop
+      ledcWrite(pwmChannel_1, 0);
+      ledcWrite(pwmChannel_2, 0);
+    }
 
     FlagCalcul = true;
-
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(Te));
   }
 }
@@ -130,23 +188,17 @@ void setup()
   ledcWrite(pwmChannel_1, dutyCycle);
   ledcWrite(pwmChannel_2, dutyCycle);
 
-  /*
-  digitalWrite(motor1Pin1, LOW);
-  digitalWrite(motor1Pin2, HIGH);
-  digitalWrite(motor2Pin1, HIGH);
-  digitalWrite(motor2Pin2, LOW);
-  */
-
   /* I2C + MPU6050 */
   Wire.begin();
-  mpu.initialize();
-
-  if (!mpu.testConnection())
+  if (!mpu.begin())
   {
     Serial.println("MPU6050 NON DETECTE");
     while (1)
       ;
   }
+
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G); //reverife les courbes 
+  mpu.setGyroRange(MPU6050_RANGE_250_DEG);
 
   /* ADC */
   analogReadResolution(12);
@@ -158,7 +210,7 @@ void setup()
 
   /* TACHES */
   xTaskCreate(taskBatterie, "Batterie", 6000, NULL, 5, NULL);
-  xTaskCreate(taskControle, "Controle", 4000, NULL, 10, NULL);
+  xTaskCreate(taskerreure, "erreure", 4000, NULL, 10, NULL);
   xTaskCreate(taskSerial, "Serial", 6000, NULL, 1, NULL);
 }
 
@@ -184,7 +236,7 @@ void reception(char ch)
       commande = chaine.substring(0, index);
       valeur = chaine.substring(index + 1, length);
     }
-
+    /*
     if (commande == "Tau")
     {
       Tau = valeur.toFloat();
@@ -198,7 +250,15 @@ void reception(char ch)
       A = 1 / (1 + Tau / Te);
       B = Tau / Te * A;
     }
-
+    */
+     if (commande == "Kp")
+    {
+      Kp = valeur.toInt();
+    }
+     if (commande == "Kd")
+    {
+      Kd = valeur.toInt();
+    }
 
     chaine = "";
   }
@@ -213,7 +273,7 @@ void loop()
 {
   if (FlagCalcul == 1)
   {
-    Serial.printf("%lf %lf %lf %lf\n", Vs, Ve, angleA, angleG);
+    Serial.printf("%lf %lf %lf %lf\n", Vs, Ve, erreur, cmd_P); // mettre gyro, 
 
     FlagCalcul = 0;
   }
