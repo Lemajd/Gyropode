@@ -5,6 +5,14 @@
 #include <Adafruit_Sensor.h>
 #include <math.h>
 #include <ESP32Encoder.h>
+#include "BluetoothSerial.h"
+
+// Vérification que le Bluetooth est bien activé dans l'IDE
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+#endif
+
+BluetoothSerial SerialBT;
 
 /* ===================== PINOUT ===================== */
 #define CLK1 34
@@ -67,6 +75,12 @@ void taskBatterie(void *parameters)
   {
     vBAT = analogRead(ADCpin);
     vBAT = (vBAT * 14.4) / 4095.0;
+
+    // Envoyer la tension au téléphone via Bluetooth (avec 2 décimales)
+    if (SerialBT.hasClient()) {
+      SerialBT.print("*T");
+      SerialBT.println(String(vBAT*10, 3));
+    }
 
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(5000));
   }
@@ -169,6 +183,9 @@ void setup()
 {
   Serial.begin(115200);
   Serial.println("Systeme demarre");
+
+  SerialBT.begin("ESP32_BestGyropode"); 
+  Serial.println("Le Bluetooth est prêt, appariez votre téléphone !");
 
   /* Encodeurs */
   // ESP32Encoder::useInternalWeakPullResistors = UP;
@@ -273,10 +290,21 @@ void loop()
 {
   if (FlagCalcul == 1)
   {
-    Serial.printf("%lf %lf %lf %lf\n", Vs, Ve, erreur, cmd_P); // mettre gyro, 
+    //Serial.printf("%lf %lf %lf %lf\n", Vs, Ve, erreur, cmd_P); // mettre gyro, 
 
     FlagCalcul = 0;
   }
+
+  // Envoyer du téléphone vers le moniteur série de l'ordi
+  if (SerialBT.available()) {
+    Serial.write(SerialBT.read());
+  }
+  
+  // Envoyer de l'ordi vers le téléphone
+  if (Serial.available()) {
+    SerialBT.write(Serial.read());
+  }
+  delay(20);
 }
 
 void serialEvent()
@@ -286,3 +314,5 @@ void serialEvent()
     reception(Serial.read());
   }
 }
+
+
