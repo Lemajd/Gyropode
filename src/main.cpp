@@ -9,7 +9,7 @@
 
 // Vérification que le Bluetooth est bien activé dans l'IDE
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+// #error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
 #endif
 
 BluetoothSerial SerialBT;
@@ -44,14 +44,14 @@ ESP32Encoder encoder_2;
 Adafruit_MPU6050 mpu;
 
 /* ===================== VARIABLES PARTAGÉES ===================== */
-volatile float Ve = 0; // entrée filtre
-volatile float Vs = 0; // sortie filtre
+volatile float Ve = 0;     // entrée filtre
+volatile float Vs = 0;     // sortie filtre
 volatile float erreur = 0; // sortie filtre
-int cmd_P = 0;
-int cmd_D = 0;
+float cmd_P = 0;
+float cmd_D = 0;
 volatile bool FlagCalcul = false;
 
-float Te = 10;    // ms
+float Te = 10;   // ms
 float Tau = 100; // ms
 float A, B;
 int k = 1; // gain de contrôle (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
@@ -61,9 +61,9 @@ float vBAT;
 float angleA;
 float angleG;
 
-float Kp = 2.94; // gain proportionnel (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
-float Kd = 2.92; // gain dérivé (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
-int cons = 0; // constante de contrôle (ajustée empiriquement pour que le pwm atteigne 255 à l'équilibre)
+float Kp = 2.94;  // gain proportionnel (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
+float Kd = 2.92;  // gain dérivé (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
+int cons = 0;     // constante de contrôle (ajustée empiriquement pour que le pwm atteigne 255 à l'équilibre)
 int offset = 135; // offset pour compenser les imperfections mécaniques (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
 
 /* ===================== TACHE Batterie ===================== */
@@ -77,17 +77,60 @@ void taskBatterie(void *parameters)
     vBAT = (vBAT * 14.4) / 4095.0;
 
     // Envoyer la tension au téléphone via Bluetooth (avec 2 décimales)
-    if (SerialBT.hasClient()) {
+    if (SerialBT.hasClient())
+    {
       SerialBT.print("*T");
-      SerialBT.println(String(vBAT*10, 3));
+      SerialBT.println(String(vBAT * 10, 3));
     }
 
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(5000));
   }
 }
 
-/* ===================== TACHE erreurE (FILTRE) ===================== */
-void taskerreure(void *parameters)
+/* ===================== TACHE IHM ===================== */
+/*
+void taskIHM(void *parameters)
+{
+  char C_BT;
+  String serie = "";
+  int index, length;
+  char data = 0;
+
+  if (SerialBT.available())
+  {
+    while (SerialBT.available() && !serie.endsWith((String)'F'))
+    {
+      C_BT = SerialBT.read();
+      serie += C_BT;
+      SerialBT.print(C_BT);
+      SerialBT.print(serie);
+    }
+    if (serie.startsWith((String)'D') && serie.endsWith((String)'F'))
+    {
+      length = serie.length();
+      data = serie.substring(1, length - 1).toInt();
+
+      switch (data)
+      {
+      case 0:
+        cons = 0;
+        break;
+
+      case 1:
+        cons = 30;
+        break;
+
+      case 3:
+        cons = -30;
+        break;
+      }
+    }
+  }
+}
+*/
+
+/* ===================== TACHE err (FILTRE) ===================== */
+void taskerr(void *parameters)
 {
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
@@ -110,37 +153,39 @@ void taskerreure(void *parameters)
 
     Ve = angleG + angleA;
     Vs = A * Ve + B * Vs;
-    
+
     erreur = cons - Vs;
 
-    cmd_P = Kp*erreur;
-    cmd_D = cmd_P - (Kd * gz * (180/M_PI));
+    cmd_P = Kp * erreur;
+    cmd_D = cmd_P - (Kd * gz * (180 / M_PI));
 
     if (cmd_D > 0)
     {
       cmd_D += offset;
-      // clamp 
-      if (cmd_D > maxOutput) cmd_D = maxOutput;
+      // clamp
+      if (cmd_D > maxOutput)
+        cmd_D = maxOutput;
 
       // drive motors to correct positive error
       digitalWrite(motor1Pin1, LOW);
       digitalWrite(motor1Pin2, HIGH);
-      digitalWrite(motor2Pin1, HIGH);
-      digitalWrite(motor2Pin2, LOW);
+      digitalWrite(motor2Pin1, LOW);
+      digitalWrite(motor2Pin2, HIGH);
       ledcWrite(pwmChannel_1, cmd_D);
       ledcWrite(pwmChannel_2, 0.95 * (cmd_D));
     }
     else if (cmd_D < 0)
     {
       cmd_D = offset - cmd_D; // make cmd_D positive and add offset
-      // clamp 
-      if (cmd_D > maxOutput) cmd_D = maxOutput;
+      // clamp
+      if (cmd_D > maxOutput)
+        cmd_D = maxOutput;
 
       // reverse direction
       digitalWrite(motor1Pin1, HIGH);
       digitalWrite(motor1Pin2, LOW);
-      digitalWrite(motor2Pin1, LOW);
-      digitalWrite(motor2Pin2, HIGH);
+      digitalWrite(motor2Pin1, HIGH);
+      digitalWrite(motor2Pin2, LOW);
       ledcWrite(pwmChannel_1, cmd_D);
       ledcWrite(pwmChannel_2, 0.95 * (cmd_D));
     }
@@ -184,7 +229,7 @@ void setup()
   Serial.begin(115200);
   Serial.println("Systeme demarre");
 
-  SerialBT.begin("ESP32_BestGyropode"); 
+  SerialBT.begin("ESP32_BestGyropode");
   Serial.println("Le Bluetooth est prêt, appariez votre téléphone !");
 
   /* Encodeurs */
@@ -214,8 +259,8 @@ void setup()
       ;
   }
 
-  mpu.setAccelerometerRange(MPU6050_RANGE_2_G); //reverife les courbes 
-  mpu.setGyroRange(MPU6050_RANGE_250_DEG);
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G); // reverife les courbes
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
 
   /* ADC */
   analogReadResolution(12);
@@ -227,8 +272,9 @@ void setup()
 
   /* TACHES */
   xTaskCreate(taskBatterie, "Batterie", 6000, NULL, 5, NULL);
-  xTaskCreate(taskerreure, "erreure", 4000, NULL, 10, NULL);
+  xTaskCreate(taskerr, "err", 4000, NULL, 10, NULL);
   xTaskCreate(taskSerial, "Serial", 6000, NULL, 1, NULL);
+  //xTaskCreate(taskIHM, "IHM", 6000, NULL, 8, NULL);
 }
 
 void reception(char ch)
@@ -268,11 +314,11 @@ void reception(char ch)
       B = Tau / Te * A;
     }
     */
-     if (commande == "Kp")
+    if (commande == "Kp")
     {
       Kp = valeur.toInt();
     }
-     if (commande == "Kd")
+    if (commande == "Kd")
     {
       Kd = valeur.toInt();
     }
@@ -290,21 +336,9 @@ void loop()
 {
   if (FlagCalcul == 1)
   {
-    //Serial.printf("%lf %lf %lf %lf\n", Vs, Ve, erreur, cmd_P); // mettre gyro, 
-
+    Serial.printf("%f %f %f %f\n", Vs, Ve, angleA, angleG);
     FlagCalcul = 0;
   }
-
-  // Envoyer du téléphone vers le moniteur série de l'ordi
-  if (SerialBT.available()) {
-    Serial.write(SerialBT.read());
-  }
-  
-  // Envoyer de l'ordi vers le téléphone
-  if (Serial.available()) {
-    SerialBT.write(Serial.read());
-  }
-  delay(20);
 }
 
 void serialEvent()
@@ -314,5 +348,3 @@ void serialEvent()
     reception(Serial.read());
   }
 }
-
-
