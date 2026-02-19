@@ -54,20 +54,30 @@ int maxOutput = 255; // valeur maximale du signal de commande (pwm 8 bits)
 float Te = 10;   // ms
 float Tau = 100; // ms
 float A, B;
-int k = 1; // gain 
+int k = 1; // gain
 float ax, ay, az, gz;
-float vBAT; // tension batterie
+float vBAT;   // tension batterie
 float angleA; // angle de l'accéléromètre
-float angleG; // angle du gyroscope 
+float angleG; // angle du gyroscope
 
-float Kp = 4;  // gain proportionnel 
-float Kd = 0.1;  // gain dérivé 
-float Kv = -0.8; // gain de compensation de la vitesse
-int aCons= -4;     // consigne d'angle 
-int vCons = 0;    // consigne de vitesse
-int offset = 130; // offset pour compenser les imperfections mécaniques (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
+float Kp = 4;               // gain proportionnel
+float Kd = 0.1;             // gain dérivé
+float Kv = -0.8;            // gain de compensation de la vitesse
+int aCons = 0;              // consigne d'angle
+int vCons = 0;              // consigne de vitesse
+int offset = 130;           // offset pour compenser les imperfections mécaniques (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
 float moteur1_ratio = 1.0;  // ratio de puissance moteur 1
-float moteur2_ratio = 0.97;  // ratio de puissance moteur 2
+float moteur2_ratio = 0.97; // ratio de puissance moteur 2
+
+char alim = 1; // alimentation (1 = ON, 0 = OFF)
+
+/*================================ BLUETOOTH ================================*/
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+#endif
+
+BluetoothSerial SerialBT;
+char valBT;
 
 /* ===================== TACHE Batterie ===================== */
 void taskBatterie(void *parameters)
@@ -77,8 +87,9 @@ void taskBatterie(void *parameters)
   while (1)
   {
     vBAT = analogRead(ADCpin);
-    vBAT = (vBAT * 14.4) / 4095.0;
+    vBAT = vBAT * (14.4 / 4095.0);
 
+    alim = (vBAT < 13.0) ? 0 : 1; // couper l'alimentation si la tension est trop basse pour éviter d'endommager la batterie
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(5000));
   }
 }
@@ -99,9 +110,11 @@ void taskControl(void *parameters)
     gz = g.gyro.y; // rad/s
 
     aCons = (vCons - VitesseCentreGeo) * Kv; // consigne d'angle ajustée en fonction de la vitesse actuelle pour compenser les imperfections mécaniques
-    if (aCons > 10) aCons = 10; // limiter la consigne d'angle pour éviter les commandes trop agressives
-    if (aCons < -10) aCons = -10;
-    
+    if (aCons > 10)
+      aCons = 10; // limiter la consigne d'angle pour éviter les commandes trop agressives
+    if (aCons < -10)
+      aCons = -10;
+
     // Position
     deltaPos1 = -encoder_1.getCount() + pos1;
     deltaPos2 = encoder_2.getCount() - pos2;
@@ -111,6 +124,7 @@ void taskControl(void *parameters)
     // angle from accelerometer: convert radians -> degrees
     float angleA_rad = atan2(az, ax);
     angleA = angleA_rad * 180.0 / M_PI; // degrees
+    angleA += 8;
 
     // gyro: g.gyro.z is in rad/s -> convert to deg/s and integrate over Tau (ms -> s)
     angleG = (gz * 180.0 / M_PI) * (Tau / 1000.0); // degrees
@@ -118,7 +132,7 @@ void taskControl(void *parameters)
     Ve = angleG + angleA;
     Vs = A * Ve + B * Vs;
 
-    erreur = aCons- Vs;
+    erreur = aCons - Vs;
 
     cmd_P = Kp * erreur;
     cmd_D = cmd_P - (Kd * gz * (180 / M_PI));
@@ -132,8 +146,8 @@ void taskControl(void *parameters)
     // Modulation de vitesse en fonction de la magnitude
     int pwm_speed = min(maxOutput, (int)(abs(cmd_D) + offset));
 
-    ledcWrite(pwmChannel_1, moteur1_ratio * pwm_speed);
-    ledcWrite(pwmChannel_2, moteur2_ratio * pwm_speed);
+    ledcWrite(pwmChannel_1, moteur1_ratio * pwm_speed * alim); // appliquer l'alimentation (alim = 0 => pwm = 0)
+    ledcWrite(pwmChannel_2, moteur2_ratio * pwm_speed * alim);
 
     pos1 = encoder_1.getCount();
     pos2 = encoder_2.getCount();
@@ -150,17 +164,35 @@ void taskCalcul(void *parameters)
   {
     if (FlagCalcul)
     {
-      
       FlagCalcul = false;
     }
-    vTaskDelay(pdMS_TO_TICKS(50));
+
+    /* BLUETOOTH - forward between USB Serial and Bluetooth SPP */
+    // Forward data from USB Serial -> Bluetooth
+    while (Serial.available())
+    {
+      int c = Serial.read();
+      SerialBT.write((uint8_t)c);
+    }
+    // Forward data from Bluetooth -> USB Serial
+    while (SerialBT.available())
+    {
+      int c = SerialBT.read();
+      Serial.write((uint8_t)c);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
 /* ===================== SETUP ===================== */
 void setup()
 {
+  /* Serial then Bluetooth initialization */
   Serial.begin(115200);
+  delay(100);
+  SerialBT.begin("ESP325"); // Bluetooth device name (Classic SPP)
+  Serial.println("The device started, now you can pair it with bluetooth!");
   Serial.println("Systeme demarre");
 
   /* Encodeurs */
@@ -236,7 +268,7 @@ void reception(char ch)
       commande = chaine.substring(0, index);
       valeur = chaine.substring(index + 1, length);
     }
-    
+
     if (commande == "Tau")
     {
       Tau = valeur.toFloat();
@@ -250,7 +282,7 @@ void reception(char ch)
       A = 1 / (1 + Tau / Te);
       B = Tau / Te * A;
     }
-    
+
     if (commande == "Kp")
     {
       Kp = valeur.toFloat();
@@ -258,6 +290,10 @@ void reception(char ch)
     if (commande == "Kd")
     {
       Kd = valeur.toFloat();
+    }
+    if (commande == "Kv")
+    {
+      Kv = valeur.toFloat();
     }
 
     chaine = "";
@@ -273,7 +309,8 @@ void loop()
 {
   if (FlagCalcul == 1)
   {
-    Serial.printf("%f %f %f %f\n", Vs, VitesseCentreGeo, cmd_P, cmd_D);
+    // Serial.printf("%f %f %f %f\n", Vs, VitesseCentreGeo, cmd_P, cmd_D);
+    Serial.printf("%f %f %f %f\n", Vs, Ve, angleA, angleG);
     FlagCalcul = 0;
   }
 }
