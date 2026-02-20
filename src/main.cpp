@@ -1,3 +1,6 @@
+// Programme ESP32 minimal: envoyer / recevoir des caractères via Bluetooth SPP
+// Utiliser une app Android (ex: Bluetooth Electronics ou Serial Bluetooth Terminal)
+
 #include <Arduino.h>
 #include <String.h>
 #include <Wire.h>
@@ -6,6 +9,8 @@
 #include <math.h>
 #include <ESP32Encoder.h>
 #include "BluetoothSerial.h"
+
+#define BT_DEVICE_NAME "Gyropode_5"
 
 /* ===================== PINOUT ===================== */
 #define CLK1 34
@@ -70,14 +75,15 @@ float moteur1_ratio = 1.0;  // ratio de puissance moteur 1
 float moteur2_ratio = 0.97; // ratio de puissance moteur 2
 
 char alim = 1; // alimentation (1 = ON, 0 = OFF)
+char BAU = 1;
+float tournerGauche = 1;
+float tournerDroite = 1;
 
 /*================================ BLUETOOTH ================================*/
-#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
-#endif
-
 BluetoothSerial SerialBT;
-char valBT;
+
+// forward declaration so taskCalcul can call reception()
+void reception(char ch);
 
 /* ===================== TACHE Batterie ===================== */
 void taskBatterie(void *parameters)
@@ -90,6 +96,8 @@ void taskBatterie(void *parameters)
     vBAT = vBAT * (14.4 / 4095.0);
 
     alim = (vBAT < 13.0) ? 0 : 1; // couper l'alimentation si la tension est trop basse pour éviter d'endommager la batterie
+    SerialBT.print("*T");
+    SerialBT.println(String(vBAT * 10, 3));
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(5000));
   }
 }
@@ -146,8 +154,8 @@ void taskControl(void *parameters)
     // Modulation de vitesse en fonction de la magnitude
     int pwm_speed = min(maxOutput, (int)(abs(cmd_D) + offset));
 
-    ledcWrite(pwmChannel_1, moteur1_ratio * pwm_speed * alim); // appliquer l'alimentation (alim = 0 => pwm = 0)
-    ledcWrite(pwmChannel_2, moteur2_ratio * pwm_speed * alim);
+    ledcWrite(pwmChannel_1, moteur1_ratio * pwm_speed * alim * tournerGauche * BAU); // appliquer l'alimentation (alim = 0 => pwm = 0)
+    ledcWrite(pwmChannel_2, moteur2_ratio * pwm_speed * alim * tournerDroite * BAU);
 
     pos1 = encoder_1.getCount();
     pos2 = encoder_2.getCount();
@@ -178,6 +186,46 @@ void taskCalcul(void *parameters)
     while (SerialBT.available())
     {
       int c = SerialBT.read();
+      // immediate short commands over Bluetooth: '0' -> vCons=0, '1' -> vCons=5, '3' -> vCons=-5
+      if (c == '0')
+      {
+        vCons = 0;
+        tournerGauche = 1;
+        tournerDroite = 1;
+      }
+      else if (c == '1')
+      {
+        vCons = 8;
+        tournerGauche = 1;
+        tournerDroite = 1;
+      }
+      else if (c == '3')
+      {
+        vCons = -8;
+        tournerGauche = 1;
+        tournerDroite = 1;
+      }
+      else if (c == '2')
+      {
+        tournerDroite = 0.75;
+        tournerGauche = 1;
+      }
+      else if (c == '4')
+      {
+        tournerGauche = 0.75;
+        tournerDroite = 1;
+      }
+      else if (c == '8')
+      {
+        BAU = 1;
+      }
+      else if (c == '9')
+      {
+        BAU = 0;
+      }
+
+      // also feed the reception() parser (for line-based commands)
+      reception((char)c);
       Serial.write((uint8_t)c);
     }
 
@@ -191,7 +239,17 @@ void setup()
   /* Serial then Bluetooth initialization */
   Serial.begin(115200);
   delay(100);
-  SerialBT.begin("ESP325"); // Bluetooth device name (Classic SPP)
+  // start Bluetooth SPP without PIN; device name defined by macro
+  if (!SerialBT.begin(BT_DEVICE_NAME))
+  {
+    Serial.println("Erreur: impossible d'initialiser BluetoothSerial");
+  }
+  else
+  {
+    Serial.print("Bluetooth SPP ready: ");
+    Serial.println(BT_DEVICE_NAME);
+  }
+
   Serial.println("The device started, now you can pair it with bluetooth!");
   Serial.println("Systeme demarre");
 
@@ -310,7 +368,7 @@ void loop()
   if (FlagCalcul == 1)
   {
     // Serial.printf("%f %f %f %f\n", Vs, VitesseCentreGeo, cmd_P, cmd_D);
-    Serial.printf("%f %f %f %f\n", Vs, Ve, angleA, angleG);
+    // Serial.printf("%f %f %f %f\n", Vs, Ve, angleA, angleG);
     FlagCalcul = 0;
   }
 }
