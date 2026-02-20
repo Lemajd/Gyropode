@@ -110,10 +110,10 @@ void taskControl(void *parameters)
     gz = g.gyro.y; // rad/s
 
     aCons = (vCons - VitesseCentreGeo) * Kv; // consigne d'angle ajustée en fonction de la vitesse actuelle pour compenser les imperfections mécaniques
-    if (aCons > 10)
-      aCons = 10; // limiter la consigne d'angle pour éviter les commandes trop agressives
-    if (aCons < -10)
-      aCons = -10;
+    if (aCons > 20)
+      aCons = 20; // limiter la consigne d'angle pour éviter les commandes trop agressives
+    if (aCons < -20)
+      aCons = -20;
 
     // Position
     deltaPos1 = -encoder_1.getCount() + pos1;
@@ -124,7 +124,7 @@ void taskControl(void *parameters)
     // angle from accelerometer: convert radians -> degrees
     float angleA_rad = atan2(az, ax);
     angleA = angleA_rad * 180.0 / M_PI; // degrees
-    angleA += 8;
+    angleA += 3.5;
 
     // gyro: g.gyro.z is in rad/s -> convert to deg/s and integrate over Tau (ms -> s)
     angleG = (gz * 180.0 / M_PI) * (Tau / 1000.0); // degrees
