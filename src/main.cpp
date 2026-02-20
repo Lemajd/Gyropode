@@ -368,7 +368,7 @@ void loop()
   if (FlagCalcul == 1)
   {
     // Serial.printf("%f %f %f %f\n", Vs, VitesseCentreGeo, cmd_P, cmd_D);
-    // Serial.printf("%f %f %f %f\n", Vs, Ve, angleA, angleG);
+    //Serial.printf("%f %f %f %f\n", Vs, Ve, angleA, angleG);
     FlagCalcul = 0;
   }
 }
