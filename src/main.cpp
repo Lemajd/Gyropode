@@ -15,8 +15,8 @@
 /* ===================== PINOUT ===================== */
 #define CLK1 34
 #define DT1 35
-#define CLK2 32
-#define DT2 33
+#define CLK2 33
+#define DT2 32
 
 int motor1Pin1 = 23;
 int motor1Pin2 = 19;
@@ -65,14 +65,20 @@ float vBAT;   // tension batterie
 float angleA; // angle de l'accéléromètre
 float angleG; // angle du gyroscope
 
-float Kp = 4;               // gain proportionnel
-float Kd = 0.1;             // gain dérivé
-float Kv = -0.8;            // gain de compensation de la vitesse
+float Kp = 4;   // gain proportionnel
+float Kd = 0.1; // gain dérivé
+float Kv = 0.4; // gain de compensation de la vitesse
+float Kiv = 0.05;
+float kdv = 0.3;
+float erreurVit = 0;
+float integralVit = 0;
+float erreurVitp = 0;
 int aCons = 0;              // consigne d'angle
 int vCons = 0;              // consigne de vitesse
 int offset = 130;           // offset pour compenser les imperfections mécaniques (ajusté empiriquement pour que le pwm atteigne 255 à l'équilibre)
 float moteur1_ratio = 1.0;  // ratio de puissance moteur 1
 float moteur2_ratio = 0.97; // ratio de puissance moteur 2
+int OFFSET = 1;
 
 char alim = 1; // alimentation (1 = ON, 0 = OFF)
 char BAU = 1;
@@ -117,14 +123,21 @@ void taskControl(void *parameters)
     az = a.acceleration.z;
     gz = g.gyro.y; // rad/s
 
-    aCons = (vCons - VitesseCentreGeo) * Kv; // consigne d'angle ajustée en fonction de la vitesse actuelle pour compenser les imperfections mécaniques
-    if (aCons > 20)
-      aCons = 20; // limiter la consigne d'angle pour éviter les commandes trop agressives
-    if (aCons < -20)
-      aCons = -20;
+    erreurVit = vCons - VitesseCentreGeo;
+    integralVit += erreurVit * Kiv;
+    if (integralVit > 3)
+      integralVit = 3; // limiter la consigne d'angle pour éviter les commandes trop agressives
+    if (integralVit < -3)
+      integralVit = -3;
+
+    aCons = (erreurVit)*Kv + integralVit - OFFSET + (erreurVit-erreurVitp)*kdv; // consigne d'angle ajustée en fonction de la vitesse actuelle pour compenser les imperfections mécaniques
+    if (aCons > 30-OFFSET)
+      aCons = 30-OFFSET; // limiter la consigne d'angle pour éviter les commandes trop agressives
+    if (aCons < -30-OFFSET)
+      aCons = -30-OFFSET;
 
     // Position
-    deltaPos1 = -encoder_1.getCount() + pos1;
+    deltaPos1 = encoder_1.getCount() - pos1;
     deltaPos2 = encoder_2.getCount() - pos2;
 
     VitesseCentreGeo = ((deltaPos1 + deltaPos2) / 2.0);
@@ -159,6 +172,8 @@ void taskControl(void *parameters)
 
     pos1 = encoder_1.getCount();
     pos2 = encoder_2.getCount();
+
+    erreurVitp = erreurVit;
 
     FlagCalcul = true;
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(Te));
@@ -195,13 +210,13 @@ void taskCalcul(void *parameters)
       }
       else if (c == '1')
       {
-        vCons = 8;
+        vCons = -8;
         tournerGauche = 1;
         tournerDroite = 1;
       }
       else if (c == '3')
       {
-        vCons = -8;
+        vCons = 8;
         tournerGauche = 1;
         tournerDroite = 1;
       }
@@ -255,8 +270,8 @@ void setup()
 
   /* Encodeurs */
   // ESP32Encoder::useInternalWeakPullResistors = UP;
-  encoder_1.attachHalfQuad(DT1, CLK1);
-  encoder_2.attachHalfQuad(DT2, CLK2);
+  encoder_1.attachFullQuad(DT1, CLK1);
+  encoder_2.attachFullQuad(DT2, CLK2);
 
   /* PWM */
   pinMode(motor1Pin1, OUTPUT);
@@ -368,7 +383,8 @@ void loop()
   if (FlagCalcul == 1)
   {
     // Serial.printf("%f %f %f %f\n", Vs, VitesseCentreGeo, cmd_P, cmd_D);
-    //Serial.printf("%f %f %f %f\n", Vs, Ve, angleA, angleG);
+
+    Serial.printf("%f %f\n", Vs, integralVit);
     FlagCalcul = 0;
   }
 }
