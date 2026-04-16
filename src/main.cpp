@@ -85,6 +85,8 @@ char BAU = 1;
 float tournerGauche = 1;
 float tournerDroite = 1;
 
+char aservON = 1; 
+
 /*================================ BLUETOOTH ================================*/
 BluetoothSerial SerialBT;
 
@@ -167,8 +169,8 @@ void taskControl(void *parameters)
     // Modulation de vitesse en fonction de la magnitude
     int pwm_speed = min(maxOutput, (int)(abs(cmd_D) + offset));
 
-    ledcWrite(pwmChannel_1, moteur1_ratio * pwm_speed * alim * tournerGauche * BAU); // appliquer l'alimentation (alim = 0 => pwm = 0)
-    ledcWrite(pwmChannel_2, moteur2_ratio * pwm_speed * alim * tournerDroite * BAU);
+    ledcWrite(pwmChannel_1, moteur1_ratio * pwm_speed * alim * aservON * BAU + tournerGauche); // appliquer l'alimentation (alim = 0 => pwm = 0)
+    ledcWrite(pwmChannel_2, moteur2_ratio * pwm_speed * alim * aservON * BAU + tournerDroite);
 
     pos1 = encoder_1.getCount();
     pos2 = encoder_2.getCount();
@@ -204,31 +206,36 @@ void taskCalcul(void *parameters)
       // immediate short commands over Bluetooth: '0' -> vCons=0, '1' -> vCons=5, '3' -> vCons=-5
       if (c == '0')
       {
+        aservON = 1;
         vCons = 0;
-        tournerGauche = 1;
-        tournerDroite = 1;
+        tournerGauche = 0;
+        tournerDroite = 0;
       }
       else if (c == '1')
       {
+        aservON = 1;
         vCons = -8;
-        tournerGauche = 1;
-        tournerDroite = 1;
+        tournerGauche = 0;
+        tournerDroite = 0;
       }
       else if (c == '3')
       {
+        aservON = 1;
         vCons = 8;
-        tournerGauche = 1;
-        tournerDroite = 1;
+        tournerGauche = 0;
+        tournerDroite = 0;
       }
       else if (c == '2')
       {
-        tournerDroite = 0.75;
-        tournerGauche = 1;
+        aservON = 0;
+        tournerDroite = 50;
+        tournerGauche = 100;
       }
       else if (c == '4')
       {
-        tournerGauche = 0.75;
-        tournerDroite = 1;
+        aservON = 0;
+        tournerGauche = 50;
+        tournerDroite = 100;
       }
       else if (c == '8')
       {
